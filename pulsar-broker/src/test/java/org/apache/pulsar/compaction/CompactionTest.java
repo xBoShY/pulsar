@@ -787,7 +787,7 @@ public class CompactionTest extends MockedPulsarServiceBaseTest {
         }
 
         // force ledger roll
-        pulsar.getBrokerService().getTopicReference(topic).get().close().get();
+        pulsar.getBrokerService().getTopicReference(topic).get().close(false).get();
 
         // write a message to avoid issue #1517
         try (Producer<byte[]> producerNormal = pulsarClient.newProducer().topic(topic).create()) {
@@ -814,7 +814,7 @@ public class CompactionTest extends MockedPulsarServiceBaseTest {
         ledgersOpened.clear();
 
         // force broker to close resources for topic
-        pulsar.getBrokerService().getTopicReference(topic).get().close().get();
+        pulsar.getBrokerService().getTopicReference(topic).get().close(false).get();
 
         // write a message to avoid issue #1517
         try (Producer<byte[]> producerNormal = pulsarClient.newProducer().topic(topic).create()) {
