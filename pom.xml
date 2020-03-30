@@ -191,7 +191,7 @@ flexible messaging model and an intuitive client API.</description>
     <hdfs-offload-version3>3.2.0</hdfs-offload-version3>
     <org.eclipse.jetty-hdfs-offload>9.3.24.v20180605</org.eclipse.jetty-hdfs-offload>
     <test-hdfs-offload-jetty>9.3.24.v20180605</test-hdfs-offload-jetty>
-    <elasticsearch.version>6.3.2</elasticsearch.version>
+    <elasticsearch.version>7.5.1</elasticsearch.version>
     <presto.version>0.206</presto.version>
     <flink.version>1.6.0</flink.version>
     <scala.binary.version>2.11</scala.binary.version>

@@ -22,7 +22,9 @@ import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
@@ -36,16 +38,20 @@ import org.apache.pulsar.io.core.SinkContext;
 import org.apache.pulsar.io.core.annotations.Connector;
 import org.apache.pulsar.io.core.annotations.IOType;
 import org.elasticsearch.action.DocWriteResponse;
-import org.elasticsearch.action.admin.indices.create.CreateIndexRequest;
-import org.elasticsearch.action.admin.indices.create.CreateIndexResponse;
-import org.elasticsearch.action.admin.indices.get.GetIndexRequest;
+import org.elasticsearch.action.bulk.*;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.index.IndexResponse;
-import org.elasticsearch.client.Requests;
+import org.elasticsearch.client.RequestOptions;
 import org.elasticsearch.client.RestClient;
 import org.elasticsearch.client.RestClientBuilder;
 import org.elasticsearch.client.RestHighLevelClient;
+import org.elasticsearch.client.indices.CreateIndexRequest;
+import org.elasticsearch.client.indices.CreateIndexResponse;
+import org.elasticsearch.client.indices.GetIndexRequest;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.unit.ByteSizeUnit;
+import org.elasticsearch.common.unit.ByteSizeValue;
+import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.xcontent.XContentType;
 
 /**
@@ -59,42 +65,41 @@ import org.elasticsearch.common.xcontent.XContentType;
     help = "A sink connector that sends pulsar messages to elastic search",
     configClass = ElasticSearchConfig.class
 )
+@Slf4j
 public class ElasticSearchSink implements Sink<byte[]> {
 
     private URL url;
     private RestHighLevelClient client;
     private CredentialsProvider credentialsProvider;
     private ElasticSearchConfig elasticSearchConfig;
+    private Processor processor;
+
+    private interface Processor {
+        void process(Request request);
+        void close() throws Exception;
+    }
 
     @Override
     public void open(Map<String, Object> config, SinkContext sinkContext) throws Exception {
         elasticSearchConfig = ElasticSearchConfig.load(config);
         elasticSearchConfig.validate();
         createIndexIfNeeded();
+        getProcessor();
     }
 
     @Override
     public void close() throws Exception {
+        getProcessor().close();
         client.close();
     }
 
     @Override
     public void write(Record<byte[]> record) {
         KeyValue<String, byte[]> keyValue = extractKeyValue(record);
-        IndexRequest indexRequest = Requests.indexRequest(elasticSearchConfig.getIndexName());
-        indexRequest.type(elasticSearchConfig.getTypeName());
-        indexRequest.source(keyValue.getValue(), XContentType.JSON);
+        Request<byte[]> request = new Request<>(elasticSearchConfig.getIndexName(), record);
+        request.source(keyValue.getValue(), XContentType.JSON);
 
-        try {
-        IndexResponse indexResponse = getClient().index(indexRequest);
-            if (indexResponse.getResult().equals(DocWriteResponse.Result.CREATED)) {
-                record.ack();
-            } else {
-                record.fail();
-            }
-        } catch (final IOException ex) {
-            record.fail();
-        }
+        getProcessor().process(request);
     }
 
     public KeyValue<String, byte[]> extractKeyValue(Record<byte[]> record) {
@@ -103,9 +108,8 @@ public class ElasticSearchSink implements Sink<byte[]> {
     }
 
     private void createIndexIfNeeded() throws IOException {
-        GetIndexRequest request = new GetIndexRequest();
-        request.indices(elasticSearchConfig.getIndexName());
-        boolean exists = getClient().indices().exists(request);
+        GetIndexRequest request = new GetIndexRequest(elasticSearchConfig.getIndexName());
+        boolean exists = getClient().indices().exists(request, RequestOptions.DEFAULT);
 
         if (!exists) {
             CreateIndexRequest cireq = new CreateIndexRequest(elasticSearchConfig.getIndexName());
@@ -114,7 +118,7 @@ public class ElasticSearchSink implements Sink<byte[]> {
                .put("index.number_of_shards", elasticSearchConfig.getIndexNumberOfShards())
                .put("index.number_of_replicas", elasticSearchConfig.getIndexNumberOfReplicas()));
 
-            CreateIndexResponse ciresp = getClient().indices().create(cireq);
+            CreateIndexResponse ciresp = getClient().indices().create(cireq,  RequestOptions.DEFAULT);
             if (!ciresp.isAcknowledged() || !ciresp.isShardsAcknowledged()) {
                 throw new RuntimeException("Unable to create index.");
             }
@@ -155,5 +159,148 @@ public class ElasticSearchSink implements Sink<byte[]> {
           client = new RestHighLevelClient(builder);
         }
         return client;
+    }
+
+    private static class Request<T> extends IndexRequest {
+        private Record<T> record;
+
+        Request(String index, Record<T> record) {
+            super(index);
+            this.record = record;
+        }
+
+        Record<T> getRecord() {
+            return record;
+        }
+    }
+
+    private Processor getProcessor() {
+        if (processor == null) {
+            if (StringUtils.equalsIgnoreCase(elasticSearchConfig.getMode(), "bulk")) {
+                System.out.println("Mode: Bulk");
+                log.info("Mode: Bulk");
+                processor = new BulkModeProcessor();
+            } else {
+                System.out.println("Mode: Single");
+                log.info("Mode: Single");
+                processor = new SingleModeProcessor();
+            }
+        }
+        return processor;
+    }
+
+    private class SingleModeProcessor implements Processor {
+        @Override
+        public void process(Request request) {
+            try {
+                IndexResponse indexResponse = getClient().index(request, RequestOptions.DEFAULT);
+                if (indexResponse.getResult().equals(DocWriteResponse.Result.CREATED)) {
+                    request.getRecord().ack();
+                } else {
+                    request.getRecord().fail();
+                }
+            } catch (final IOException ex) {
+                request.getRecord().fail();
+            }
+        }
+
+        @Override
+        public void close() throws Exception {
+            /* do nothing */
+        }
+    }
+
+    private class BulkModeProcessor implements Processor {
+        private BulkProcessor bulkProcessor;
+
+        @Override
+        public void process(Request request) {
+            getBulkProcessor().add(request);
+        }
+
+        @Override
+        public void close() throws Exception {
+            bulkProcessor.awaitClose(elasticSearchConfig.getBulkAwaitClose(), TimeUnit.MILLISECONDS);
+        }
+
+        private BulkProcessor getBulkProcessor() {
+            if (bulkProcessor == null) {
+                BulkProcessor.Listener listener = new BulkProcessor.Listener() {
+                    @Override
+                    public void beforeBulk(long executionId, BulkRequest bulkRequest) {
+                        int numberOfActions = bulkRequest.numberOfActions();
+                        log.info("Executing bulk [{}] with {} requests",
+                            executionId, numberOfActions);
+                    }
+
+                    @Override
+                    public void afterBulk(long executionId, BulkRequest bulkRequest, BulkResponse bulkResponse) {
+                        BulkItemResponse[] responseItems = bulkResponse.getItems();
+                        int numberOfActions = bulkRequest.numberOfActions();
+                        int numberOfResponses = bulkResponse.getItems().length;
+                        int numberOfFailures = 0;
+
+                        for(int i = 0; i < responseItems.length; ++i) {
+                            Request request = ((Request) bulkRequest.requests().get(i));
+                            Record record = request.getRecord();
+                            BulkItemResponse respItem = responseItems[i];
+
+                            try {
+                                if (!respItem.isFailed()) {
+                                    record.ack();
+                                } else {
+                                    String e = respItem.getFailureMessage();
+                                    log.warn("Failed request: {}", e);
+                                    record.fail();
+                                    ++numberOfFailures;
+                                }
+                            } catch (Exception e) {
+                                ++numberOfFailures;
+                                log.warn("Failed to ACK or Fail: {}", e);
+                                record.fail();
+                            }
+                        }
+
+                        if (numberOfActions != numberOfResponses) {
+                            log.warn("Got {} responses of {} requests.", numberOfActions, numberOfResponses);
+                        }
+
+                        if (numberOfFailures > 0) {
+                            log.warn("Bulk [{}] executed with {} failures of a total {} actions",
+                                executionId, numberOfFailures, numberOfActions);
+                        } else {
+                            log.info("Bulk [{}] completed {} actions in {} milliseconds, ingest took {} milliseconds",
+                                executionId, numberOfActions,
+                                bulkResponse.getTook().getMillis(), bulkResponse.getIngestTook().getMillis());
+                        }
+                    }
+
+                    @Override
+                    public void afterBulk(long executionId, BulkRequest bulkRequest, Throwable failure) {
+                        log.error("Failed to execute bulk", failure);
+                    }
+                };
+
+                BulkProcessor.Builder bulkProcessorBuilder = BulkProcessor.builder(
+                    (request, bulkListener) ->
+                        client.bulkAsync(request, RequestOptions.DEFAULT, bulkListener),
+                    listener
+                );
+
+                bulkProcessorBuilder
+                    .setConcurrentRequests(elasticSearchConfig.getBulkConcurrentRequests())
+                    .setBulkActions(elasticSearchConfig.getBulkActions())
+                    .setBulkSize(new ByteSizeValue(elasticSearchConfig.getBulkSize(), ByteSizeUnit.MB))
+                    .setFlushInterval(TimeValue.timeValueMillis(elasticSearchConfig.getBulkFlushInterval()))
+                    .setBackoffPolicy(BackoffPolicy.exponentialBackoff(
+                        TimeValue.timeValueMillis(
+                            elasticSearchConfig.getBulkBackoffInterval()),
+                        elasticSearchConfig.getBulkBackoffRetries()
+                    ));
+
+                bulkProcessor = bulkProcessorBuilder.build();
+            }
+            return bulkProcessor;
+        }
     }
 }

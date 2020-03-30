@@ -54,15 +54,6 @@ public class ElasticSearchConfig implements Serializable {
 
     @FieldDoc(
         required = false,
-        defaultValue = "_doc",
-        help = "The type name that the connector writes messages to, with the default value set to _doc." +
-                " This value should be set explicitly to a valid type name other than _doc for Elasticsearch version before 6.2," +
-                " and left to the default value otherwise."
-    )
-    private String typeName = "_doc";
-
-    @FieldDoc(
-        required = false,
         defaultValue = "1",
         help = "The number of shards of the index"
     )
@@ -91,6 +82,63 @@ public class ElasticSearchConfig implements Serializable {
     )
     private String password;
 
+    @FieldDoc(
+        required = false,
+        defaultValue = "single",
+        sensitive = false,
+        help = ""
+    )
+    private String mode = "single";
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "0",
+        help = ""
+    )
+    private int bulkConcurrentRequests = 0;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "500",
+        help = ""
+    )
+    private int bulkActions = 500;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "4",
+        help = ""
+    )
+    private int bulkSize = 4;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "2000",
+        help = ""
+    )
+    private int bulkFlushInterval = 2000;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "1000",
+        help = ""
+    )
+    private int bulkBackoffInterval = 1000;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "3",
+        help = ""
+    )
+    private int bulkBackoffRetries = 3;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "3",
+        help = ""
+    )
+    private int bulkAwaitClose = 3;
+
     public static ElasticSearchConfig load(String yamlFile) throws IOException {
         ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
         return mapper.readValue(new File(yamlFile), ElasticSearchConfig.class);
@@ -117,6 +165,44 @@ public class ElasticSearchConfig implements Serializable {
 
         if (indexNumberOfReplicas < 0) {
             throw new IllegalArgumentException("indexNumberOfReplicas must be a positive integer");
+        }
+
+        if ((
+            StringUtils.isNotEmpty(mode)
+                && !StringUtils.equalsIgnoreCase(mode, "single")
+                && !StringUtils.equalsIgnoreCase(mode, "bulk"))
+            || (StringUtils.isEmpty(mode))) {
+            throw new IllegalArgumentException("Invalid Mode [" + mode + "]. Must be [single,bulk].");
+        }
+
+        if (StringUtils.equalsIgnoreCase(mode, "bulk")) {
+            if (bulkConcurrentRequests < 0) {
+                throw new IllegalArgumentException("");
+            }
+
+            if (bulkActions < 0) {
+                throw new IllegalArgumentException("");
+            }
+
+            if (bulkSize < 0) {
+                throw new IllegalArgumentException("");
+            }
+
+            if (bulkFlushInterval < 0) {
+                throw new IllegalArgumentException("");
+            }
+
+            if (bulkBackoffInterval < 0) {
+                throw new IllegalArgumentException("");
+            }
+
+            if (bulkBackoffRetries < 0) {
+                throw new IllegalArgumentException("");
+            }
+
+            if (bulkAwaitClose < 0) {
+                throw new IllegalArgumentException("");
+            }
         }
     }
 }

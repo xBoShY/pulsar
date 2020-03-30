@@ -39,7 +39,6 @@ public class ElasticSearchConfigTests {
         assertNotNull(config);
         assertEquals(config.getElasticSearchUrl(), "http://localhost:90902");
         assertEquals(config.getIndexName(), "myIndex");
-        assertEquals(config.getTypeName(), "doc");
         assertEquals(config.getUsername(), "scooby");
         assertEquals(config.getPassword(), "doobie");
     }
@@ -49,7 +48,6 @@ public class ElasticSearchConfigTests {
         Map<String, Object> map = new HashMap<String, Object> ();
         map.put("elasticSearchUrl", "http://localhost:90902");
         map.put("indexName", "myIndex");
-        map.put("typeName", "doc");
         map.put("username", "racerX");
         map.put("password", "go-speedie-go");
         
@@ -57,7 +55,6 @@ public class ElasticSearchConfigTests {
         assertNotNull(config);
         assertEquals(config.getElasticSearchUrl(), "http://localhost:90902");
         assertEquals(config.getIndexName(), "myIndex");
-        assertEquals(config.getTypeName(), "doc");
         assertEquals(config.getUsername(), "racerX");
         assertEquals(config.getPassword(), "go-speedie-go");  
     }
@@ -68,7 +65,6 @@ public class ElasticSearchConfigTests {
 
         assertNull(config.getElasticSearchUrl());
         assertNull(config.getIndexName());
-        assertEquals(config.getTypeName(), "_doc");
         assertNull(config.getUsername());
         assertNull(config.getPassword());
         assertEquals(config.getIndexNumberOfReplicas(), 1);
