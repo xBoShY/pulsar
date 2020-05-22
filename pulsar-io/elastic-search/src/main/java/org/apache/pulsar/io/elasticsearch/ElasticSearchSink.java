@@ -200,6 +200,7 @@ public class ElasticSearchSink implements Sink<byte[]> {
                     request.getRecord().fail();
                 }
             } catch (final IOException ex) {
+                log.error("Failed to process record with sequence [" + request.getRecord().getRecordSequence() + "}");
                 request.getRecord().fail();
             }
         }
@@ -229,7 +230,7 @@ public class ElasticSearchSink implements Sink<byte[]> {
                     @Override
                     public void beforeBulk(long executionId, BulkRequest bulkRequest) {
                         int numberOfActions = bulkRequest.numberOfActions();
-                        log.info("Executing bulk [{}] with {} requests",
+                        log.info("Bulk [{}] - Executing {} requests",
                             executionId, numberOfActions);
                     }
 
@@ -250,26 +251,27 @@ public class ElasticSearchSink implements Sink<byte[]> {
                                     record.ack();
                                 } else {
                                     String e = respItem.getFailureMessage();
-                                    log.warn("Failed request: {}", e);
+                                    log.warn("Bulk [{}] - Item [{}} failed request: {}", executionId, i, e);
                                     record.fail();
                                     ++numberOfFailures;
                                 }
                             } catch (Exception e) {
                                 ++numberOfFailures;
-                                log.warn("Failed to ACK or Fail: {}", e);
+                                log.warn("Bulk [{}] - Item [{}} failed to ACK or Fail:", executionId, i, e);
                                 record.fail();
                             }
                         }
 
                         if (numberOfActions != numberOfResponses) {
-                            log.warn("Got {} responses of {} requests.", numberOfActions, numberOfResponses);
+                            log.warn("Bulk [{}] - Got {} responses of {} requests.", executionId, numberOfActions, numberOfResponses);
                         }
 
                         if (numberOfFailures > 0) {
-                            log.warn("Bulk [{}] executed with {} failures of a total {} actions",
-                                executionId, numberOfFailures, numberOfActions);
+                            log.warn("Bulk [{}] - Completed {} actions with {} failures in {} milliseconds, ingest took {} milliseconds",
+                                executionId, numberOfFailures, numberOfActions,
+                                bulkResponse.getTook().getMillis(), bulkResponse.getIngestTook().getMillis());
                         } else {
-                            log.info("Bulk [{}] completed {} actions in {} milliseconds, ingest took {} milliseconds",
+                            log.info("Bulk [{}] - Completed {} actions in {} milliseconds, ingest took {} milliseconds",
                                 executionId, numberOfActions,
                                 bulkResponse.getTook().getMillis(), bulkResponse.getIngestTook().getMillis());
                         }
@@ -277,7 +279,7 @@ public class ElasticSearchSink implements Sink<byte[]> {
 
                     @Override
                     public void afterBulk(long executionId, BulkRequest bulkRequest, Throwable failure) {
-                        log.error("Failed to execute bulk", failure);
+                        log.error("Bulk [{}] - Failed to execute bulk", executionId, failure);
                     }
                 };
 
